@@ -1,0 +1,5 @@
+<section class="content">
+{% for one_film in films %}
+    <div>{{ one_film["name"] }} {{ one_film["year"] }} {{ one_film["rating"] }} <a href="/films/{{ one_film["id"] }}">{{ one_film["name"] }}</a> </div>
+{% endfor %}
+</section>
