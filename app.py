@@ -1,4 +1,6 @@
-from flask import Flask, request, jsonify, render_template
+import functools
+
+from flask import Flask, request, jsonify, render_template, redirect, url_for
 from flask import session
 import sqlite3
 
@@ -14,14 +16,12 @@ def film_dictionary(cursor, row):
         d[col[0]] = row[idx]
     return d
 
-def get_db_result(query, params=()):
+def get_db_results(query, params=()):
     conn = sqlite3.connect("a1.db")
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = film_dictionary
     cursor = conn.cursor()
-
     cursor.execute(query, params)
-    result = cursor.fetchone()
-
+    result = cursor.fetchall()
     conn.close()
     return result
 
@@ -41,7 +41,17 @@ class db_connection:
         self.conn.close()
 
 
-@app.route('/', methods=['GET'])
+def decorator_check_login(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if session.get('logged_in'):
+            return func(*args, **kwargs)
+        else:
+            return redirect(url_for('user_login'))
+    return wrapper
+
+@app.route('/')
+@decorator_check_login
 def main_page():
     with db_connection() as cur:
         result = cur.execute("""SELECT * FROM film ORDER BY added_at DESC LIMIT 10""").fetchall()
@@ -88,11 +98,13 @@ def user_login_post():
     return 'Login failed'
 
 @app.route('/logout', methods=['GET'])
+@decorator_check_login
 def user_logout():
     session.clear()
     return 'Logout'
 
 @app.route('/user/<user_id>', methods=['GET', 'POST'])
+@decorator_check_login
 def user_profile(user_id):
     session_user_id = session.get('user_id')
     if request.method == 'POST':
@@ -125,6 +137,7 @@ def user_profile(user_id):
     #return f'You logged in as {user_by_session}, user {user_id}, data: {user_by_id}'
 
 @app.route('/user/<user_id>/delete', methods=['GET'])
+@decorator_check_login
 def user_delete(user_id):
     session_user_id = session.get('user_id')
     if user_id == session_user_id:
@@ -133,17 +146,26 @@ def user_delete(user_id):
         return 'You can delete only your profile'
 
 @app.route('/films', methods=['GET'])
+@decorator_check_login
 def films():
-    with db_connection() as cur:
-        rows = cur.execute("""
-            SELECT id, poster, name, description, rating, country, added_at
-            FROM film
-            ORDER BY added_at DESC
-        """).fetchall()
-    return jsonify(rows)
+    filter_params = request.args
+    filter_list_texts = []
+    for key, value in filter_params.items():
+        if value:
+            if key == 'name':
+                filter_list_texts.append(f"name LIKE '%{value}%'")
+            else:
+                filter_list_texts.append(f"{key}='{value}'")
+    additional_filter = ""
+    if filter_list_texts:
+        additional_filter = " where " + " and ".join(filter_list_texts)
+    result = get_db_results(f"""SELECT * FROM film {additional_filter} ORDER BY added_at DESC""")
+    countries = get_db_results("select * from country")
+    return render_template("films.html", films=result, countries=countries)
 
 
 @app.route('/films', methods=['POST'])
+@decorator_check_login
 def films_add():
     data = request.get_json() or {}
     name = data.get("name")
@@ -181,10 +203,7 @@ def films_info(film_id):
             WHERE af.film_id = ?
         """, (film_id,)).fetchall()
 
-        genres = cur.execute("""
-            SELECT g.genre
-            FROM genre g
-            JOIN genre_film gf ON g.genre = gf.genre_id
+        genres = cur.execute("""SELECT g.genre FROM genre g JOIN genre_film gf ON g.genre = gf.genre_id
             WHERE gf.film_id = ?
         """, (film_id,)).fetchall()
 
@@ -202,13 +221,12 @@ def films_info(film_id):
 
 
 @app.route('/films/<int:film_id>', methods=['PUT'])
+@decorator_check_login
 def films_update(film_id):
     data = request.get_json() or {}
 
     with db_connection() as cur:
-        cur.execute("""
-            UPDATE film
-            SET name = COALESCE(?, name),
+        cur.execute("""UPDATE film SET name = COALESCE(?, name),
                 poster = COALESCE(?, poster),
                 description = COALESCE(?, description),
                 rating = COALESCE(?, rating),
@@ -231,6 +249,7 @@ def films_update(film_id):
 
 
 @app.route('/films/<int:film_id>', methods=['DELETE'])
+@decorator_check_login
 def films_delete(film_id):
     with db_connection() as cur:
         cur.execute("DELETE FROM film WHERE id = ?", (film_id,))
@@ -316,6 +335,7 @@ def films_ratings_info(film_id):
 
 
 @app.route('/films/<int:film_id>/rating', methods=['POST'])
+@decorator_check_login
 def films_rating_add(film_id):
     data = request.get_json() or {}
     user_id = data.get("user_id")
@@ -336,6 +356,7 @@ def films_rating_add(film_id):
 
 
 @app.route('/films/<int:film_id>/rating/<int:feedback_id>', methods=['DELETE'])
+@decorator_check_login
 def films_ratings_delete(film_id, feedback_id):
     with db_connection() as cur:
         cur.execute("""
@@ -351,6 +372,7 @@ def films_ratings_delete(film_id, feedback_id):
 
 
 @app.route('/films/<int:film_id>/rating/<int:feedback_id>', methods=['PUT'])
+@decorator_check_login
 def films_ratings_update(film_id, feedback_id):
     data = request.get_json() or {}
     grade = data.get("grade")

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
+
+<form action="/films" method="get">
+    <input type="text" name="name">
+    <input type="text" name="year">
+    <input type="text" name="rating">
+    <select name="country" id="country">
+        {% for country in countries %}
+            <option value="{{ country['country_name'] }}">{{ country['country_name'] }}</option>
+        {% endfor %}
+    </select>
+    <input type="submit" value="Submit">
+</form>
+
+
+<br>
+<br>
+<br>
+<br>
+
+{% for one_film in films %}
+	<div>{{ one_film["name"] }} {{ one_film["year"] }} {{ one_film["rating"] }} <a href="/films/{{ one_film["id"] }}">{{ one_film["name"] }}</a> </div>
+{% endfor %}
+</body>
+</html>
