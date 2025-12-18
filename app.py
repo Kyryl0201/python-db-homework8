@@ -1,52 +1,23 @@
 import functools
 import os
+
 from dateutil import parser
 
-from sqlalchemy import select
+from sqlalchemy import select, delete, update, func
 
-import database
+import database, time
 
 from flask import Flask, request, jsonify, render_template, redirect, url_for
 from flask import session
-import sqlite3
 
 import models
+from models import ActorsFilms
 
 app = Flask(__name__)
 app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
 app.config['JSON_AS_ASCII'] = False
 app.json.ensure_ascii = False
 
-
-def film_dictionary(cursor, row):
-    d = {}
-    for idx, col in enumerate(cursor.description):
-        d[col[0]] = row[idx]
-    return d
-
-def get_db_results(query, params=()):
-    conn = sqlite3.connect("a1.db")
-    conn.row_factory = film_dictionary
-    cursor = conn.cursor()
-    cursor.execute(query, params)
-    result = cursor.fetchall()
-    conn.close()
-    return result
-
-
-
-class db_connection:
-    def __init__(self):
-        self.conn = sqlite3.connect('a1.db')
-        self.conn.row_factory = film_dictionary
-        self.cur = self.conn.cursor()
-
-    def __enter__(self):
-        return self.cur
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.conn.commit()
-        self.conn.close()
 
 
 def decorator_check_login(func):
@@ -61,9 +32,10 @@ def decorator_check_login(func):
 @app.route('/')
 @decorator_check_login
 def main_page():
-    with db_connection() as cur:
-        result = cur.execute("""SELECT * FROM film ORDER BY added_at DESC LIMIT 10""").fetchall()
-    return render_template("main.html",films=result)
+    database.init_db()
+    smth = select(models.Film).order_by(models.Film.added_at.desc()).limit(10)
+    film = database.db_session.execute(smth).scalars().all()
+    return render_template("main.html",films=film)
 
 
 @app.route('/register', methods=['GET'])
@@ -103,10 +75,6 @@ def user_login_post():
 
     database.init_db()
 
-    stmt = select(models.User).where(models.User.login == login, models.User.password == password)
-    data = database.db_session.execute(stmt).fetchall()
-    if data:
-        user_obj = data[0][0]
 
     result = database.db_session.query(models.User).filter_by(login=login, password=password).first()
     # result == user_obj
@@ -126,6 +94,8 @@ def user_logout():
 @app.route('/user/<user_id>', methods=['GET', 'POST'])
 @decorator_check_login
 def user_profile(user_id):
+
+    database.init_db()
     session_user_id = session.get('user_id')
     if request.method == 'POST':
         if int(user_id) != session_user_id:
@@ -135,24 +105,29 @@ def user_profile(user_id):
         last_name = request.form['last_name']
         email = request.form['email']
         password = request.form['password']
-        birth_date = request.form['birth_date']
+        birth_date = parser.parse(request.form['birth_date'])
         phone = request.form['phone']
         photo = request.form['photo']
         additional_info = request.form['additional_info']
-        with db_connection() as cur:
-            cur.execute(f"UPDATE user SET first_name='{first_name}', last_name='{last_name}', email='{email}', password='{password}', birth_date='{birth_date}', phone_number='{phone}', photo='{photo}', additional_info='{additional_info}' WHERE id={user_id}")
 
-            return f'User {user_id} updated'
+        stmt = update(models.User).where(models.User.id == user_id).values(first_name=first_name, last_name=last_name, email=email, password=password, birth_date=birth_date, phone_number=phone, photo=photo, additional_info=additional_info)
+        database.db_session.execute(stmt)
+        database.db_session.commit()
+        return f'User {user_id} updated'
+
     else:
-        with db_connection() as cur:
-            cur.execute(f"SELECT * FROM user WHERE id={user_id}")
-            user_by_id = cur.fetchone()
+
+        query_user_by_id = select(models.User).where(models.User.id == user_id)
+        user_by_id = database.db_session.execute(query_user_by_id).scalar_one()
 
         if session_user_id is None:
             user_by_session = "No user in session"
         else:
-            cur.execute(f"SELECT * FROM user WHERE id={session_user_id}")
-            user_by_session = cur.fetchone()
+            query_user_by_session = select(models.User).where(models.User.id == session_user_id)
+            user_by_session = database.db_session.execute(query_user_by_session).scalar_one()
+
+
+        database.db_session.commit()
     return render_template("user_page.html", user=user_by_id, user_session=user_by_session)
     #return f'You logged in as {user_by_session}, user {user_id}, data: {user_by_id}'
 
@@ -160,7 +135,7 @@ def user_profile(user_id):
 @decorator_check_login
 def user_delete(user_id):
     session_user_id = session.get('user_id')
-    if user_id == session_user_id:
+    if int(user_id) == session_user_id:
         return f'User {user_id} deleted'
     else:
         return 'You can delete only your profile'
@@ -170,73 +145,89 @@ def user_delete(user_id):
 def films():
     filter_params = request.args
     filter_list_texts = []
+    films_query = select(models.Film)
     for key, value in filter_params.items():
         if value:
             if key == 'name':
-                filter_list_texts.append(f"name LIKE '%{value}%'")
-            else:
-                filter_list_texts.append(f"{key}='{value}'")
-    additional_filter = ""
-    if filter_list_texts:
-        additional_filter = " where " + " and ".join(filter_list_texts)
-    result = get_db_results(f"""SELECT * FROM film {additional_filter} ORDER BY added_at DESC""")
-    countries = get_db_results("select * from country")
-    return render_template("films.html", films=result, countries=countries)
+                films_query = films_query.where(models.Film.name.like(f"%{value}%"))
+            elif key == 'rating':
+                    value = float(value)
+                    films_query = films_query.where(models.Film.rating == value)
+            elif key == 'country':
+                    films_query = films_query.where(models.Film.country == value)
+            elif key == 'year':
+                    films_query = films_query.where(models.Film.year == int(value))
+
+    films = films_query.order_by(models.Film.added_at.desc())
+    result_films = database.db_session.execute(films).scalars()
+    countries = select(models.Country)
+    result_countries = database.db_session.execute(countries).scalars()
+
+    return render_template("films.html", films=result_films, countries=result_countries)
 
 
 @app.route('/films', methods=['POST'])
 @decorator_check_login
 def films_add():
+    database.init_db()
+
     data = request.get_json() or {}
     name = data.get("name")
     poster = data.get("poster")
     description = data.get("description")
     rating = data.get("rating")
     country = data.get("country")
+    year = data.get("year")
+    duration = data.get("duration")
 
-    if not name:
-        return jsonify({"error": "name is required"}), 400
+    if not name or not country or year is None or duration is None:
+        return jsonify({"error": "name, country, year, duration are required"}), 400
 
-    with db_connection() as cur:
-        cur.execute("""
-            INSERT INTO film (name, poster, description, rating, country, added_at)
-            VALUES (?, ?, ?, ?, ?, strftime('%s','now'))
-        """, (name, poster, description, rating, country))
-        film_id = cur.lastrowid
+    new_film = models.Film(
+        name=name,
+        poster=poster,
+        rating=rating,
+        country=country,
+        year=int(year),
+        duration=int(duration),
+        added_at=int(time.time())
+    )
 
-    return jsonify({"film_id": film_id}), 201
+
+    if hasattr(new_film, "description"):
+        new_film.description = description
+    else:
+        new_film.description = description
+
+    database.db_session.add(new_film)
+    database.db_session.commit()
+
+    return jsonify({"film_id": new_film.id}), 201
 
 
 @app.route('/films/<int:film_id>', methods=['GET'])
 def films_info(film_id):
-    with db_connection() as cur:
-        film = cur.execute("""
-            SELECT id, name, poster, description, rating, country, added_at
-            FROM film
-            WHERE id = ?
-        """, (film_id,)).fetchone()
+    database.init_db()
 
-        actors = cur.execute("""
-            SELECT a.id, a.first_name, a.last_name, a.birth_day, a.death_day, a.description
-            FROM actor a
-            JOIN actor_film af ON a.id = af.actor_id
-            WHERE af.film_id = ?
-        """, (film_id,)).fetchall()
+    film_by_id = select(models.Film).where(models.Film.id == film_id)
+    result_film_by_id = database.db_session.execute(film_by_id).scalar_one()
 
-        genres = cur.execute("""SELECT g.genre FROM genre g JOIN genre_film gf ON g.genre = gf.genre_id
-            WHERE gf.film_id = ?
-        """, (film_id,)).fetchall()
+    actors = select(models.Actor).join(models.ActorsFilms, models.Actor.id == models.ActorsFilms.actor_id).where(models.ActorsFilms.film_id == film_id)
+    result_actors = database.db_session.execute(actors).scalars().all()
+
+    genres = (select(models.Genre).join(models.GenresFilm, models.Genre.genre == models.GenresFilm.genre_id).where(models.GenresFilm.film_id == film_id))
+    result_genres = database.db_session.execute(genres).scalars().all()
 
     return jsonify({
-        "id": film["id"],
-        "name": film["name"],
-        "poster": film["poster"],
-        "description": film["description"],
-        "rating": film["rating"],
-        "country": film["country"],
-        "added_at": film["added_at"],
-        "actors": actors,
-        "genres": genres
+        "id": result_film_by_id.id,
+        "name": result_film_by_id.name,
+        "poster": result_film_by_id.poster,
+        "description": result_film_by_id.description,
+        "rating": result_film_by_id.rating,
+        "country": result_film_by_id.country,
+        "added_at": result_film_by_id.added_at,
+        "actors": [itm.to_dict() for itm in result_actors],
+        "genres": [itm.to_dict() for itm in result_genres]
     })
 
 
@@ -244,26 +235,20 @@ def films_info(film_id):
 @decorator_check_login
 def films_update(film_id):
     data = request.get_json() or {}
+    database.init_db()
 
-    with db_connection() as cur:
-        cur.execute("""UPDATE film SET name = COALESCE(?, name),
-                poster = COALESCE(?, poster),
-                description = COALESCE(?, description),
-                rating = COALESCE(?, rating),
-                country = COALESCE(?, country)
-            WHERE id = ?
-        """, (
-            data.get("name"),
-            data.get("poster"),
-            data.get("description"),
-            data.get("rating"),
-            data.get("country"),
-            film_id
-        ))
-        updated = cur.rowcount
+    new_film_query = select(models.Film).where(models.Film.id == film_id)
+    new_film = database.db_session.execute(new_film_query).scalar_one()
 
-    if updated == 0:
-        return jsonify({"error": "Film not found"}), 404
+    new_film.name = data.get("name")
+    new_film.poster = data.get("poster")
+    new_film.description = data.get("description")
+    new_film.rating = data.get("rating")
+    new_film.country = data.get("country")
+    database.db_session.add(new_film)
+    database.db_session.commit()
+
+
 
     return jsonify({"film_id": film_id})
 
@@ -271,11 +256,13 @@ def films_update(film_id):
 @app.route('/films/<int:film_id>', methods=['DELETE'])
 @decorator_check_login
 def films_delete(film_id):
-    with db_connection() as cur:
-        cur.execute("DELETE FROM film WHERE id = ?", (film_id,))
-        deleted = cur.rowcount
+    database.init_db()
 
-    if deleted == 0:
+    stmt = delete(models.Film).where(models.Film.id == film_id)
+    res = database.db_session.execute(stmt)
+    database.db_session.commit()
+
+    if res.rowcount == 0:
         return jsonify({"error": "Film not found"}), 404
 
     return jsonify({"film_id": film_id})
@@ -285,107 +272,96 @@ def films_delete(film_id):
 def films_search():
     name = request.args.get('name', '')
 
-    with db_connection() as cur:
-        rows = cur.execute("""
-            SELECT id, name, poster, description, rating, country, added_at
-            FROM film
-            WHERE name LIKE ?
-            ORDER BY added_at DESC
-        """, (f"%{name}%",)).fetchall()
-
-    return jsonify(rows)
+    films_search_query = (select(models.Film).where(models.Film.name.like(f"%{name}%")).order_by(models.Film.added_at.desc()))
+    result_films_search = database.db_session.execute(films_search_query).scalars().all()
+    return jsonify([itm.to_dict() for itm in result_films_search])
 
 
 @app.route('/films/filter', methods=['GET'])
 def films_filter():
+    database.init_db()
     name = request.args.get('name')
     genre = request.args.get('genre')
     country = request.args.get('country')
 
-    query = """
-        SELECT DISTINCT f.id, f.name, f.poster, f.description, f.rating, f.country, f.added_at
-        FROM film f
-        LEFT JOIN genre_film gf ON f.id = gf.film_id
-        LEFT JOIN genre g ON g.genre = gf.genre_id
-        WHERE 1=1
-    """
-    params = []
-
-    if name:
-        query += " AND f.name LIKE ?"
-        params.append(f"%{name}%")
+    stmt = select(models.Film).distinct()
 
     if genre:
-        query += " AND g.name = ?"
-        params.append(genre)
+        stmt = stmt.join(models.GenresFilm, models.GenresFilm.film_id == models.Film.id) \
+            .join(models.Genre, models.Genre.genre == models.GenresFilm.genre_id) \
+            .where(models.Genre.genre == genre)
 
+    if name:
+        stmt = stmt.where(models.Film.name.like(f"%{name}%"))
     if country:
-        query += " AND f.country = ?"
-        params.append(country)
+        stmt = stmt.where(models.Film.country == country)
 
-    query += " ORDER BY f.added_at DESC"
-
-    with db_connection() as cur:
-        rows = cur.execute(query, params).fetchall()
-
-    return jsonify(rows)
+    film = database.db_session.execute(stmt).scalars().all()
+    return jsonify([f.to_dict() for f in film])
 
 
 @app.route('/films/<int:film_id>/rating', methods=['GET'])
 def films_ratings_info(film_id):
-    with db_connection() as cur:
-        ratings = cur.execute("""
-            SELECT id, user_id, grade, description
-            FROM feedback
-            WHERE film_id = ?
-        """, (film_id,)).fetchall()
+    database.init_db()
 
-        avg = cur.execute("""
-            SELECT AVG(grade) AS avg_rating, COUNT(*) AS cnt
-            FROM feedback
-            WHERE film_id = ?
-        """, (film_id,)).fetchone()
+    ratings_query = select(models.Feedback).where(models.Feedback.film == film_id)
+    ratings = database.db_session.execute(ratings_query).scalars().all()
+
+    grades_query = (
+        select(
+            func.avg(models.Feedback.grade).label('average'),
+            func.count(models.Feedback.id).label('ratings_count')
+        )
+        .where(models.Feedback.film == film_id)
+    )
+    avg_rating, ratings_count = database.db_session.execute(grades_query).one()
 
     return jsonify({
         "film_id": film_id,
-        "average_rating": avg["avg_rating"],
-        "ratings_count": avg["cnt"],
-        "ratings": ratings
+        "average_rating": avg_rating,
+        "ratings_count": ratings_count,
+        "ratings": [
+            {
+                "id": r.id,
+                "user": r.user,
+                "grade": r.grade,
+                "description": r.descripyion
+            } for r in ratings
+        ]
     })
 
 
 @app.route('/films/<int:film_id>/rating', methods=['POST'])
 @decorator_check_login
 def films_rating_add(film_id):
+    database.init_db()
     data = request.get_json() or {}
-    user_id = data.get("user_id")
-    grade = data.get("grade")
-    description = data.get("description")
 
-    if user_id is None or grade is None:
-        return jsonify({"error": "user_id and grade are required"}), 400
+    fb = models.Feedback(
+        film=film_id,
+        user=data["user_id"],
+        grade=data.get("grade"),
+        descripyion=data.get("description")
+    )
+    database.db_session.add(fb)
+    database.db_session.commit()
 
-    with db_connection() as cur:
-        cur.execute("""
-            INSERT INTO feedback (user_id, film_id, grade, description)
-            VALUES (?, ?, ?, ?)
-        """, (user_id, film_id, grade, description))
-        feedback_id = cur.lastrowid
-
-    return jsonify({"feedback_id": feedback_id}), 201
+    return jsonify({"feedback_id": fb.id}), 201
 
 
 @app.route('/films/<int:film_id>/rating/<int:feedback_id>', methods=['DELETE'])
 @decorator_check_login
 def films_ratings_delete(film_id, feedback_id):
-    with db_connection() as cur:
-        cur.execute("""
-            DELETE FROM feedback
-            WHERE id = ? AND film_id = ?
-        """, (feedback_id, film_id))
-        deleted = cur.rowcount
+    database.init_db()
 
-    if deleted == 0:
+    stmt = delete(models.Feedback).where(
+        models.Feedback.id == feedback_id,
+        models.Feedback.film == film_id
+    )
+    res = database.db_session.execute(stmt)
+    database.db_session.commit()
+
+    if res.rowcount == 0:
         return jsonify({"error": "feedback not found"}), 404
 
     return jsonify({"feedback_id": feedback_id})
@@ -394,23 +370,25 @@ def films_ratings_delete(film_id, feedback_id):
 @app.route('/films/<int:film_id>/rating/<int:feedback_id>', methods=['PUT'])
 @decorator_check_login
 def films_ratings_update(film_id, feedback_id):
+    database.init_db()
     data = request.get_json() or {}
-    grade = data.get("grade")
-    description = data.get("description")
 
-    with db_connection() as cur:
-        cur.execute("""
-            UPDATE feedback
-            SET grade = COALESCE(?, grade),
-                description = COALESCE(?, description)
-            WHERE id = ? AND film_id = ?
-        """, (grade, description, feedback_id, film_id))
-        updated = cur.rowcount
+    stmt = (
+        update(models.Feedback)
+        .where(models.Feedback.id == feedback_id, models.Feedback.film == film_id)
+        .values(
+            grade=data.get("grade"),
+            descripyion=data.get("description")
+        )
+    )
+    res = database.db_session.execute(stmt)
+    database.db_session.commit()
 
-    if updated == 0:
+    if res.rowcount == 0:
         return jsonify({"error": "feedback not found"}), 404
 
     return jsonify({"feedback_id": feedback_id})
+
 
 
 if __name__ == '__main__':
