@@ -249,7 +249,6 @@ def films_update(film_id):
     database.db_session.commit()
 
 
-
     return jsonify({"film_id": film_id})
 
 
@@ -341,7 +340,7 @@ def films_rating_add(film_id):
         film=film_id,
         user=data["user_id"],
         grade=data.get("grade"),
-        descripyion=data.get("description")
+        description=data.get("description")
     )
     database.db_session.add(fb)
     database.db_session.commit()
@@ -392,4 +391,5 @@ def films_ratings_update(film_id, feedback_id):
 
 
 if __name__ == '__main__':
+    database.init_db()
     app.run(debug=True)

@@ -13,6 +13,11 @@ class User(Base):
     photo = Column(String(255))
     additional_info = Column(String(255))
     birth_date = Column(Date)
+    last_login = Column(Date)
+    created_at = Column(Date)
+    logged_out_at = Column(Date)
+    logged_out_at2= Column(Date)
+
 
     def __repr__(self):
         return f'<User {self.login!r}>'
@@ -38,11 +43,12 @@ class Film(Base):
     name = Column(String(50), nullable=False)
     year = Column(Integer, nullable=False)
     poster = Column(String(255))
-    descripyion = Column(String(255))
+    description = Column(String(255))
     rating = Column(Integer)
     duration = Column(Integer, nullable=False)
     added_at = Column(Integer, nullable=False)
     country = Column(String(50), nullable=False)
+    vates_amount = Column(Integer)
 
     def __repr__(self):
         return f'<Film {self.name!r}>'
@@ -77,6 +83,7 @@ class List(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('user.id'))
     film_id = Column(Integer, ForeignKey('film.id'))
+    created_at = Column(Date)
 
 class FilmList(Base):
     __tablename__ = 'film_list'
@@ -90,7 +97,7 @@ class Feedback(Base):
     film = Column(Integer, ForeignKey('film.id'))
     user = Column(Integer, ForeignKey('user.id'))
     grade = Column(Integer)
-    descripyion = Column(String(255))
+    description = Column(String(255))
 
 class Country(Base):
     __tablename__ = 'country'
