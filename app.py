@@ -1,5 +1,6 @@
 import functools
 import os
+from venv import create
 
 from dateutil import parser
 
@@ -10,6 +11,7 @@ import database, time
 from flask import Flask, request, jsonify, render_template, redirect, url_for
 from flask import session
 
+import email_worker
 import models
 from models import ActorsFilms
 
@@ -18,6 +20,19 @@ app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
 app.config['JSON_AS_ASCII'] = False
 app.json.ensure_ascii = False
 
+
+import uuid
+
+def create_and_save_confirmation(user_id, email):
+    # Заглушка для учебного проекта
+    return str(uuid.uuid4())
+
+def build_message_body_for_confirmation(secret_code, user_first_name):
+    return f"""
+    <h2>Hello, {user_first_name}!</h2>
+    <p>Your confirmation code:</p>
+    <b>{secret_code}</b>
+    """
 
 
 def decorator_check_login(func):
@@ -42,7 +57,6 @@ def main_page():
 def register_page():
     return render_template("register.html")
 
-
 @app.route('/register', methods=['POST'])
 def user_register():
     first_name = request.form['fname']
@@ -54,12 +68,29 @@ def user_register():
 
     database.init_db()
 
-    new_user = models.User(first_name=first_name, last_name=last_name, password=password, login=login, email=email, birth_date=birth_date)
+    new_user = models.User(
+        first_name=first_name,
+        last_name=last_name,
+        password=password,
+        login=login,
+        email=email,
+        birth_date=birth_date
+    )
+
 
     database.db_session.add(new_user)
-    database.db_session.commit()
+    database.db_session.flush()
 
-    return 'Register'
+    secret_code = create_and_save_confirmation(new_user.id, new_user.email)
+    message_body = build_message_body_for_confirmation(secret_code, user_first_name=new_user.first_name)
+
+    from email_worker import send_html_email
+    send_html_email.delay(new_user.email, "Confirm your email", message_body)
+
+    database.db_session.commit()
+    return "OK"
+
+
 
 
 @app.route('/login', methods=['GET'])
@@ -388,8 +419,16 @@ def films_ratings_update(film_id, feedback_id):
 
     return jsonify({"feedback_id": feedback_id})
 
+@app.route('/users/<user_id>/list/<list_id>', methods=['GET', 'POST'])
+@decorator_check_login
+def user_list_item(user_id, list_id):
+    return f'User {user_id} list item {list_id}'
 
+@app.route('/users/<user_id>/list/<list_id>/<film_id>', methods=['DELETE'])
+@decorator_check_login
+def user_list_item_delete(user_id, list_id, film_id):
+    return f'User {user_id} list item {film_id} deleted'
 
 if __name__ == '__main__':
     database.init_db()
-    app.run(debug=True)
+    app.run(host="0.0.0.0", debug=True)

@@ -1,10 +1,12 @@
 FROM python:3-slim
 
-workdir /app
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY . .
-RUN pip3 install -r requirements.txt
 
-expose 5000
+EXPOSE 5000
 
-CMD ["python", "app.py"]
+

@@ -1,0 +1,65 @@
+version: "3.8"
+
+services:
+  webapp:
+    build: .
+    container_name: webapp_container
+    ports:
+      - "5000:5000"
+    command: python app.py
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=amqp://admin:admin@rabbitmq:5672//
+      - DATABASE_URL=postgresql://myuser:mepassword@database:5432/mydatabase
+    depends_on:
+      - database
+      - rabbitmq
+
+  celery_worker:
+    build: .
+    container_name: celery_worker_container
+    command: celery -A email_worker worker --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=amqp://admin:admin@rabbitmq:5672//
+      - DATABASE_URL=postgresql://myuser:mepassword@database:5432/mydatabase
+    depends_on:
+      - database
+      - rabbitmq
+
+  celery_beat:
+    build: .
+    container_name: celery_beat_container
+    command: celery -A email_worker beat --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=amqp://admin:admin@rabbitmq:5672//
+      - DATABASE_URL=postgresql://myuser:mepassword@database:5432/mydatabase
+    depends_on:
+      - database
+      - rabbitmq
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq_container
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+
+  database:
+    image: postgres:13
+    container_name: database_container
+    ports:
+      - "5432:5432"
+    hostname: database
+    environment:
+      POSTGRES_DB: mydatabase
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mepassword
